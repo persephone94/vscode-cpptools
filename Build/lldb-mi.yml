@@ -1,35 +1,78 @@
 variables:
   llvmTag: llvmorg-8.0.1
-  clangVer: 3.6
 
 jobs:
 - job: LLDB_MI
+  timeoutInMinutes: 360
   pool:
-    vmImage: 'ubuntu-16.04'
+    vmImage: 'macOS-latest'
   steps:
-  - script: sudo apt-get update
-  - script: sudo apt-get install ninja-build clang++-$(clangVer) -y
-  - script: |
-     git clone https://github.com/llvm/llvm-project.git
-     cd llvm-project
-     git checkout tags/$(llvmTag)
-     cd ..
-     mkdir llvm-inst
-     mkdir llvm-build
-     cd llvm-build
+  - task: CmdLine@2
+    displayName: 'Install Homebrew'
+    inputs: 
+      script: mkdir homebrew && curl -L https://github.com/Homebrew/brew/tarball/master | tar xz --strip 1 -C homebrew
 
-     cmake -DLLVM_ENABLE_PROJECTS="clang;lldb;libcxx;libcxxabi" -DCMAKE_INSTALL_PREFIX=~/buildspace/llvm-inst/ -GNinja ../llvm-project/llvm
-     ninja
-     ninja install
+  - task: CmdLine@2
+    displayName: 'Update Homebrew'
+    inputs: 
+      script: brew update
 
-     # Download lldb-mi and build it against our custom installation.
-     mkdir buildspace
-     cd ~/buildspace
-     git clone https://github.com/lldb-tools/lldb-mi
-     cd lldb-mi
+  - task: CmdLine@2
+    displayName: 'Install Dependencies'
+    inputs: 
+      script: brew install cmake ninja swig
+    continueOnError: true
 
-     # Create a separate build directory for building lldb-mi.
-     mkdir build
-     cd build
-     cmake -DCMAKE_PREFIX_PATH=~/buildspace/llvm-inst/ -GNinja ..
-     ninja
+  - task: CmdLine@2
+    displayName: 'LLVM and LLDB-MI'
+    inputs: 
+      script: |
+        echo "##[section] Build LLVM Project"
+
+        git clone https://github.com/llvm/llvm-project.git
+        cd llvm-project
+        git checkout tags/$(llvmTag)
+        cd ..
+        mkdir llvm-inst
+        mkdir llvm-build
+        cd llvm-build
+
+        echo "##[command] cmake -DLLVM_ENABLE_PROJECTS="clang\;lldb\;libcxx\;libcxxabi" -DCMAKE_INSTALL_PREFIX=~/buildspace/llvm-inst/ -GNinja ../llvm-project/llvm"
+        cmake -DLLVM_ENABLE_PROJECTS="clang;lldb;libcxx;libcxxabi" -DCMAKE_INSTALL_PREFIX=~/buildspace/llvm-inst/ -GNinja ../llvm-project/llvm
+        if [[ $? -ne 0 ]]
+        then
+          echo "##[error] cmake llvm failed"
+          cat $(Build.SourcesDirectory)/llvm-build/CMakeFiles/CMakeError.log
+          exit 1
+        fi
+
+        echo "##[command] ninja"
+        ninja
+        if [[ $? -ne 0 ]]
+        then
+          echo "##[error] ninja failed"
+          exit 1
+        fi
+
+
+        echo "##[command] ninja install"
+        ninja install
+        if [[ $? -ne 0 ]]
+        then
+          echo "##[error] ninja install failed"
+          exit 1
+        fi
+
+
+        echo "##[section] Build LLDB-MI"
+        # Download lldb-mi and build it against our custom installation.
+        mkdir buildspace
+        cd ~/buildspace
+        git clone https://github.com/lldb-tools/lldb-mi
+        cd lldb-mi
+
+        # Create a separate build directory for building lldb-mi.
+        mkdir build
+        cd build
+        cmake -DCMAKE_PREFIX_PATH=~/buildspace/llvm-inst/ -GNinja ..
+        ninja

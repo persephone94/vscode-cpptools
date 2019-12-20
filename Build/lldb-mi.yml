@@ -7,15 +7,15 @@ jobs:
   pool:
     vmImage: 'macOS-latest'
   steps:
-  - task: CmdLine@2
-    displayName: 'Install Homebrew'
-    inputs: 
-      script: mkdir homebrew && curl -L https://github.com/Homebrew/brew/tarball/master | tar xz --strip 1 -C homebrew
+  # - task: CmdLine@2
+  #   displayName: 'Install Homebrew'
+  #   inputs: 
+  #     script: mkdir homebrew && curl -L https://github.com/Homebrew/brew/tarball/master | tar xz --strip 1 -C homebrew
 
-  - task: CmdLine@2
-    displayName: 'Update Homebrew'
-    inputs: 
-      script: brew update
+  # - task: CmdLine@2
+  #   displayName: 'Update Homebrew'
+  #   inputs: 
+  #     script: brew update
 
   - task: CmdLine@2
     displayName: 'Install Dependencies'
@@ -23,56 +23,124 @@ jobs:
       script: brew install cmake ninja swig
     continueOnError: true
 
+  # - task: CmdLine@2
+  #   displayName: 'Build LLVM Project'
+  #   inputs: 
+  #     script: |
+  #       git clone https://github.com/llvm/llvm-project.git
+  #       cd llvm-project
+  #       git checkout tags/$(llvmTag)
+  #       cd ..
+  #       mkdir llvm-inst
+  #       mkdir llvm-build
+  #       cd llvm-build
+
+  #       echo "##[command] cmake -DLLVM_ENABLE_PROJECTS="clang\;lldb\;libcxx\;libcxxabi" -DCMAKE_INSTALL_PREFIX=~/buildspace/llvm-inst/ -GNinja ../llvm-project/llvm"
+  #       cmake -DLLVM_ENABLE_PROJECTS="clang;lldb;libcxx;libcxxabi" -DCMAKE_INSTALL_PREFIX=~/buildspace/llvm-inst/ -GNinja ../llvm-project/llvm
+  #       if [[ $? -ne 0 ]]
+  #       then
+  #         echo "##[error] cmake llvm failed"
+  #         cat $(Build.SourcesDirectory)/llvm-build/CMakeFiles/CMakeError.log
+  #         exit 1
+  #       fi
+
+  #       echo "##[command] ninja"
+  #       ninja
+  #       if [[ $? -ne 0 ]]
+  #       then
+  #         echo "##[error] ninja failed"
+  #         exit 1
+  #       fi
+
+  #       echo "##[command] ninja install"
+  #       ninja install
+  #       if [[ $? -ne 0 ]]
+  #       then
+  #         echo "##[error] ninja install failed"
+  #         exit 1
+  #       fi
+
+  # - task: CmdLine@2
+  #   displayName: 'Build LLDB-MI'
+  #   inputs: 
+  #     script: |
+  #       echo "##[section] Build LLDB-MI"
+  #       # Download lldb-mi and build it against our custom installation.
+  #       mkdir buildspace
+  #       cd ~/buildspace
+  #       git clone https://github.com/lldb-tools/lldb-mi
+  #       cd lldb-mi
+
+  #       # Create a separate build directory for building lldb-mi.
+  #       mkdir build
+  #       cd build
+  #       cmake -DCMAKE_PREFIX_PATH=~/buildspace/llvm-inst/ -GNinja ..
+  #       ninja
+
   - task: CmdLine@2
-    displayName: 'LLVM and LLDB-MI'
+    displayName: 'Brew Install LLVM'
     inputs: 
       script: |
-        echo "##[section] Build LLVM Project"
+        brew install llvm@9 jq
 
-        git clone https://github.com/llvm/llvm-project.git
-        cd llvm-project
-        git checkout tags/$(llvmTag)
-        cd ..
-        mkdir llvm-inst
-        mkdir llvm-build
-        cd llvm-build
+  - task: CmdLine@2
+    displayName: 'Build LLDB-MI'
+    inputs: 
+      script: |
+        llvm_json=$(brew info --json llvm)
+        echo "##[debug] llvm_json is $llvm_json"
+        
+        llvm_version=$(echo $llvm_json | jq $_.[0].installed[0].version | tr -d '"')
+        echo "##[debug] llvm_version is $llvm_version"
 
-        echo "##[command] cmake -DLLVM_ENABLE_PROJECTS="clang\;lldb\;libcxx\;libcxxabi" -DCMAKE_INSTALL_PREFIX=~/buildspace/llvm-inst/ -GNinja ../llvm-project/llvm"
-        cmake -DLLVM_ENABLE_PROJECTS="clang;lldb;libcxx;libcxxabi" -DCMAKE_INSTALL_PREFIX=~/buildspace/llvm-inst/ -GNinja ../llvm-project/llvm
-        if [[ $? -ne 0 ]]
-        then
-          echo "##[error] cmake llvm failed"
-          cat $(Build.SourcesDirectory)/llvm-build/CMakeFiles/CMakeError.log
-          exit 1
-        fi
-
-        echo "##[command] ninja"
-        ninja
-        if [[ $? -ne 0 ]]
-        then
-          echo "##[error] ninja failed"
-          exit 1
-        fi
-
-
-        echo "##[command] ninja install"
-        ninja install
-        if [[ $? -ne 0 ]]
-        then
-          echo "##[error] ninja install failed"
-          exit 1
-        fi
-
-
-        echo "##[section] Build LLDB-MI"
-        # Download lldb-mi and build it against our custom installation.
-        mkdir buildspace
-        cd ~/buildspace
         git clone https://github.com/lldb-tools/lldb-mi
         cd lldb-mi
 
-        # Create a separate build directory for building lldb-mi.
         mkdir build
         cd build
-        cmake -DCMAKE_PREFIX_PATH=~/buildspace/llvm-inst/ -GNinja ..
+
+        cmake "-DCMAKE_PREFIX_PATH=/usr/local/Cellar/llvm/$llvm_version/lib/cmake/llvm/" -GNinja ..
         ninja
+
+        mkdir $(Build.SourcesDirectory)/output
+        cp $(Build.SourcesDirectory)/lldb-mi/build/src/lldb-mi $(Build.SourcesDirectory)/output
+        cp /usr/local/Cellar/llvm/$llvm_version/lib/liblldb.* $(Build.SourcesDirectory)/output
+
+        cd $(Build.SourcesDirectory)/output
+
+        zip -r ../lldb-mi.zip *
+
+  - task: PublishPipelineArtifact@1
+    displayName: 'Publish LLDB-MI'
+    inputs:
+      targetPath: '$(Build.SourcesDirectory)/lldb-mi.zip'
+      artifactName: 'lldb-mi'
+
+- job: SignFiles
+  dependsOn: LLDB_MI
+  pool:
+    name: 'MicroBuildV2Pool'
+  steps:
+  - task: DownloadPipelineArtifact@2
+    inputs:
+      source: 'current'
+      artifact: 'lldb-mi'
+      path: '$(Pipeline.Workspace)/signing'
+
+  - task: ms-vseng.MicroBuildTasks.30666190-6959-11e5-9f96-f56098202fef.MicroBuildSigningPlugin@2
+    inputs:
+      signType: 'test'
+      feedSource: 'https://devdiv.pkgs.visualstudio.com/DefaultCollection/_packaging/MicroBuildToolset/nuget/v3/index.json'   
+
+  - task: ms-vseng.MicroBuildTasks.7973a23b-33e3-4b00-a7d9-c06d90f8297f.MicroBuildSignMacFiles@1
+    inputs:
+      SigningTarget: '$(Pipeline.Workspace)/signing/lldb-mi.zip'
+      SigningCert: '8003'
+      SigningPluginSource: 'https://devdiv.pkgs.visualstudio.com/DefaultCollection/_packaging/MicroBuildToolset/nuget/v3/index.json'
+      SigningPluginVersion: 'latest'
+
+  - task: PublishPipelineArtifact@1
+    displayName: 'Publish LLDB-MI'
+    inputs:
+      targetPath: '$(Build.SourcesDirectory)/lldb-mi.zip'
+      artifactName: 'lldb-mi-signed'
